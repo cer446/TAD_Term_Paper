@@ -1,5 +1,12 @@
+rm(list = ls())
+install.packages("ROCR")
+install.packages("caret")
+install.packages("randomForest")
 install.packages("rpart") 
+library(randomForest)
+library(ROCR)
 library(data.table)
+library(caret)
 ?fread
 
 setwd("/Users/jonathanatoy/Desktop/kickstarter_project/TAD_Term_Paper")
@@ -27,6 +34,9 @@ LIWC2015_Results_kickstarter <- LIWC2015_Results_kickstarter[-1, ]
 
 LIWC2015_Results_kickstarter_c <- LIWC2015_Results_kickstarter[rowSums(is.na(LIWC2015_Results_kickstarter))<=5,]
 
+#Save space by unloading dataset
+
+
 #Very few nulls remaining in the rows that aren't mostly null
 
 View(LIWC2015_Results_kickstarter_c[rowSums(is.na(LIWC2015_Results_kickstarter_c))>=1,])
@@ -39,7 +49,7 @@ unique(LIWC2015_Results_kickstarter_c$project_final_state)
 
 my.max <- function(x) ifelse( !all(is.na(x)), max(x, na.rm=T), NA)
 
-my.max(LIWC2015_Results_kickstarter$project_deadline)
+my.max(LIWC2015_Results_kickstarter_c$project_deadline)
 
 #5 entries that are relatively clean that have an NA final project state
 
@@ -51,9 +61,16 @@ LIWC2015_Results_kickstarter_c <- LIWC2015_Results_kickstarter_c[LIWC2015_Result
 
 LIWC2015_Results_kickstarter_c$target <- ifelse(LIWC2015_Results_kickstarter_c$project_final_state=='successful', 1, 0)
 
-#64,503 successes and 141,905 unsuccessful
+#remove rows with NA for target (5 of them)
+LIWC2015_Results_kickstarter_c <- LIWC2015_Results_kickstarter_c[complete.cases(LIWC2015_Results_kickstarter_c$target),]
 
+#64,503 successes and 141,905 unsuccessful
 table(LIWC2015_Results_kickstarter_c$target)
+
+#The Random Forest function doesn't like there to be a feature called "function"
+temp_col_names <- colnames(LIWC2015_Results_kickstarter_c)
+temp_col_names[28] <- "function_"
+colnames(LIWC2015_Results_kickstarter_c) <- temp_col_names
 
 #Split Data
 
@@ -75,7 +92,11 @@ test <- LIWC2015_Results_kickstarter_c[-train_ind, ]
 # Classification Tree with rpart
 library(rpart)
 
-colnames(train[0:5, c(21:24,50:51,58:59,64:65,80:84,95:97,99:100,113)])
+colnames(train)
+
+################
+#Decision Trees#
+################
 
 # In below testing we can use the depth of the tree required to see even moderate improvements
 # in the cost-complexity parameter as a proxy for the signal in the included variables. If there
@@ -156,7 +177,7 @@ fit_punct <- rpart(target ~ ., parms = list(split = "information"), control=list
 printcp(fit_punct) # display the results 
 plotcp(fit_punct) # visualize cross-validation results 
 summary(fit_punct) # detailed summary of splits
-
+importance(fit_punct)
 # plot tree 
 plot(fit_punct, uniform=TRUE, 
      main="Classification Tree for Kickstarter Data")
@@ -166,7 +187,135 @@ text(fit_punct, use.n=TRUE, all=TRUE, cex=.8)
 #Can likely link this to informality and relaxing of strict language norms (colloquial speak)
 
 
-# create attractive postscript plot of tree 
-#post(fit, file = "tree.ps", 
-#     title = "Classification Tree for Kickstarter Data")
+#####################
+#Logistic Regression#
+#####################
+
+#Create a LM with all of the potential target variables
+
+LR<-glm(target ~ ., family=binomial(link='logit'), data=subset(train,select=c(20:24,50:51,58:59,64:65,80:84,95:100,102:111,113)))
+summary(LR)
+anova(LR, test="Chisq")
+
+fitted.results <- predict(LR,newdata=subset(test,select=c(20:24,50:51,58:59,64:65,80:84,95:100,102:111)),type='response')
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != test$target,na.rm = TRUE)
+print(paste('Accuracy',1-misClasificError))
+
+
+p <- predict(LR, newdata=subset(test,select=c(20:24,50:51,58:59,64:65,80:84,95:100,102:111)), type="response")
+pr <- prediction(p, test$target)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+
+#Strip out punctuation and rerun
+LR_no_punct<-glm(target ~ ., family=binomial(link='logit'), data=subset(train,select=c(20:24,50:51,58:59,64:65,80:84,95:100,113)))
+summary(LR_no_punct)
+anova(LR_no_punct, test="Chisq")
+
+fitted.results <- predict(LR_no_punct,newdata=subset(test,select=c(20:24,50:51,58:59,64:65,80:84,95:100)),type='response')
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != test$target,na.rm = TRUE)
+print(paste('Accuracy',1-misClasificError))
+
+p <- predict(LR_no_punct, newdata=subset(test,select=c(20:24,50:51,58:59,64:65,80:84,95:100)), type="response")
+pr <- prediction(p, test$target)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+
+#Use only informal categories
+LR_inf<-glm(target ~ ., family=binomial(link='logit'), data=subset(train,select=c(20,95:100,102:111,113)))
+summary(LR_inf)
+anova(LR_inf, test="Chisq")
+
+fitted.results <- predict(LR_inf,newdata=subset(test,select=c(20,95:100,102:111)),type='response')
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != test$target,na.rm = TRUE)
+print(paste('Accuracy',1-misClasificError))
+
+p <- predict(LR_inf, newdata=subset(test,select=c(20,95:100,102:111)), type="response")
+pr <- prediction(p, test$target)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+
+#Use all linguistic features
+LR_all<-glm(target ~ ., family=binomial(link='logit'), data=subset(train,select=c(20:113)))
+summary(LR_all)
+
+
+fitted.results <- predict(LR_all,newdata=subset(test,select=c(20:112)),type='response')
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != test$target,na.rm = TRUE)
+print(paste('Accuracy',1-misClasificError))
+
+
+p <- predict(LR_all, newdata=subset(test,select=c(20:112)), type="response")
+pr <- prediction(p, test$target)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+
+###############
+#Random Forest#
+###############
+
+#Notes that for RF, the AUC curves might need to be redone (they look too straight), 
+#possibly using OOB estimate within the function
+
+#Try RF using linguistic features (minus AllPunct, Period, Colon, Dash, Other)
+fit=randomForest(factor(target) ~ ., na.action = na.omit, importance=TRUE, ntree=20, data=subset(train,select=c(20:100,102:103,105:107,109:110,113)))
+(VI_F=round(importance(fit),2))
+
+#Plot top variables wrt node impurity
+varImpPlot(fit,type=2)
+
+p <- predict(fit, newdata=subset(test,select=c(20:100,102:103,105:107,109:110)), type="response")
+pr <- prediction((p==1)*1, test$target)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+
+#Try RF with project category & funding goal(USD)
+#Note: city & country had too many unique values for R to deal with as categorical
+
+train$project_category <- as.factor(train$project_category)
+train$project_city <- as.factor(train$project_city)
+train$project_country <- as.factor(train$project_country)
+
+test$project_category <- as.factor(test$project_category)
+test$project_city <- as.factor(test$project_city)
+test$project_country <- as.factor(test$project_country)
+
+
+fit_meta=randomForest(factor(target) ~ ., na.action = na.omit, importance=TRUE, ntree=20, data=subset(train,select=c(5,13,20:100,102:103,105:107,109:110,113)))
+(VI_F_meta=round(importance(fit_meta),2))
+
+#Plot top variables wrt accuracy
+varImpPlot(fit_meta,type=1)
+#Plot top variables wrt node impurity
+varImpPlot(fit_meta,type=2)
+
+#Goal(USD) & project category have very large amount of signal, but linguistic
+#features still have decently large importance (plus there's a lot more of them)
+
+p <- predict(fit_meta, newdata=subset(test,select=c(5,13,20:100,102:103,105:107,109:110)), type="response")
+pr <- prediction((p==1)*1, test$target)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
 
