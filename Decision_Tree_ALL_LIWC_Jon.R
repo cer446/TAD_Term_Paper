@@ -1,12 +1,16 @@
 rm(list = ls())
 install.packages("ROCR")
+install.packages("pRF")
 install.packages("caret")
 install.packages("randomForest")
 install.packages("rpart") 
+source("https://bioconductor.org/biocLite.R")
+biocLite("multtest")
 library(randomForest)
 library(ROCR)
 library(data.table)
 library(caret)
+library(pRF)
 ?fread
 
 setwd("/Users/jonathanatoy/Desktop/kickstarter_project/TAD_Term_Paper")
@@ -35,8 +39,8 @@ LIWC2015_Results_kickstarter <- LIWC2015_Results_kickstarter[-1, ]
 LIWC2015_Results_kickstarter_c <- LIWC2015_Results_kickstarter[rowSums(is.na(LIWC2015_Results_kickstarter))<=5,]
 
 #Save space by unloading dataset
-
-
+rm(Kickstarter_project_data_all)
+rm(LIWC2015_Results_kickstarter)
 #Very few nulls remaining in the rows that aren't mostly null
 
 View(LIWC2015_Results_kickstarter_c[rowSums(is.na(LIWC2015_Results_kickstarter_c))>=1,])
@@ -278,6 +282,7 @@ fit=randomForest(factor(target) ~ ., na.action = na.omit, importance=TRUE, ntree
 (VI_F=round(importance(fit),2))
 
 #Plot top variables wrt node impurity
+varImpPlot(fit,type=1)
 varImpPlot(fit,type=2)
 
 p <- predict(fit, newdata=subset(test,select=c(20:100,102:103,105:107,109:110)), type="response")
@@ -311,11 +316,28 @@ varImpPlot(fit_meta,type=2)
 #Goal(USD) & project category have very large amount of signal, but linguistic
 #features still have decently large importance (plus there's a lot more of them)
 
-p <- predict(fit_meta, newdata=subset(test,select=c(5,13,20:100,102:103,105:107,109:110)), type="response")
-pr <- prediction((p==1)*1, test$target)
-prf <- performance(pr, measure = "tpr", x.measure = "fpr")
-plot(prf)
-auc <- performance(pr, measure = "auc")
-auc <- auc@y.values[[1]]
-auc
 
+#Run permutation test on random forest to test significance of feature importance values
+m <- floor(sqrt(length(c(5,13,20:100,102:103,105:107,109:110))))
+
+p.test<-pRF(response=factor(train$target),
+predictors=train[,c(5,13,20:100,102:103,105:107,109:110)],ntree = 20, mtry=m, n.perms=50,
+type="classification",alpha=0.05)
+
+
+sigplot(pRF.list=p.test,threshold=0.1)
+varImpPlot(p.test$Model,1)
+
+df<-cbind(p.test$Res.table,p.test$obs)
+df[order(-df$MeanDecreaseGini),]
+df[order(df$p.value, -df$MeanDecreaseGini),]
+write.csv(df[order(df$p.value, -df$MeanDecreaseGini),], file = "pRF_feat_importance.csv")
+
+
+p_rf <- predict(p.test$Model, newdata=subset(test,select=c(5,13,20:100,102:103,105:107,109:110)), type="prob")
+pr_rf <- prediction(p_rf[,2], test$target)
+prf_rf <- performance(pr_rf, measure = "tpr", x.measure = "fpr")
+plot(prf_rf)
+auc_rf <- performance(pr_rf, measure = "auc")
+auc_rf <- auc_rf@y.values[[1]]
+auc_rf
